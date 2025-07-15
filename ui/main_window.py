@@ -165,6 +165,23 @@ class MainWindow(QMainWindow):
         next_action.triggered.connect(self.next_image)
         toolbar.addAction(next_action)
 
+        # 快速定位功能
+        toolbar.addSeparator()
+        goto_first_unlabeled_action = QAction("🎯 跳转到未标注", self)
+        goto_first_unlabeled_action.setShortcut(QKeySequence("Ctrl+U"))
+        goto_first_unlabeled_action.triggered.connect(self.goto_first_unlabeled_image)
+        toolbar.addAction(goto_first_unlabeled_action)
+
+        goto_next_unlabeled_action = QAction("⏭️ 下一个未标注", self)
+        goto_next_unlabeled_action.setShortcut(QKeySequence("Shift+U"))
+        goto_next_unlabeled_action.triggered.connect(self.goto_next_unlabeled_image)
+        toolbar.addAction(goto_next_unlabeled_action)
+
+        goto_prev_unlabeled_action = QAction("⏮️ 上一个未标注", self)
+        goto_prev_unlabeled_action.setShortcut(QKeySequence("Shift+Ctrl+U"))
+        goto_prev_unlabeled_action.triggered.connect(self.goto_prev_unlabeled_image)
+        toolbar.addAction(goto_prev_unlabeled_action)
+
         toolbar.addSeparator()
 
         # 缩放控制
@@ -206,6 +223,23 @@ class MainWindow(QMainWindow):
         # 图像列表
         image_group = QGroupBox("图像列表")
         image_layout = QVBoxLayout()
+
+        # 添加快速定位按钮
+        quick_nav_layout = QHBoxLayout()
+
+        self.goto_first_btn = QPushButton("🎯 首个未标注")
+        self.goto_first_btn.setToolTip("跳转到第一张未标注的图片 (Ctrl+U)")
+        self.goto_first_btn.clicked.connect(self.goto_first_unlabeled_image)
+        self.goto_first_btn.setEnabled(False)
+
+        self.goto_next_btn = QPushButton("⏭️ 下个未标注")
+        self.goto_next_btn.setToolTip("跳转到下一张未标注的图片 (Shift+U)")
+        self.goto_next_btn.clicked.connect(self.goto_next_unlabeled_image)
+        self.goto_next_btn.setEnabled(False)
+
+        quick_nav_layout.addWidget(self.goto_first_btn)
+        quick_nav_layout.addWidget(self.goto_next_btn)
+        image_layout.addLayout(quick_nav_layout)
 
         self.image_list = QListWidget()
         self.image_list.currentRowChanged.connect(self.on_image_selected)
@@ -306,8 +340,13 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_label = QLabel("0 / 0 (0.0%)")
 
+        # 添加未标注数量显示
+        self.unlabeled_count_label = QLabel("未标注: 0 张")
+        self.unlabeled_count_label.setStyleSheet("color: #f44336; font-weight: bold;")
+
         progress_layout.addWidget(self.progress_bar)
         progress_layout.addWidget(self.progress_label)
+        progress_layout.addWidget(self.unlabeled_count_label)
         progress_group.setLayout(progress_layout)
         right_layout.addWidget(progress_group)
 
@@ -344,7 +383,8 @@ class MainWindow(QMainWindow):
         self.status_bar.addWidget(self.root_path_label)
 
         # 快捷键提示
-        shortcut_label = QLabel("快捷键: A/D(导航) | 鼠标滚轮(缩放) | 拖拽(平移) | 1-9,0(选择类别) | Ctrl+S(保存)")
+        shortcut_label = QLabel(
+            "快捷键: A/D(导航) | Ctrl+U(首个未标注) | Shift+U(下个未标注) | 1-9,0(选择类别) | Ctrl+S(保存)")
         self.status_bar.addPermanentWidget(shortcut_label)
 
     def update_root_path_display(self):
@@ -363,11 +403,126 @@ class MainWindow(QMainWindow):
         QShortcut(Qt.Key.Key_Left, self, self.previous_image)
         QShortcut(Qt.Key.Key_Right, self, self.next_image)
 
+        # 快速定位快捷键
+        QShortcut(QKeySequence("Ctrl+U"), self, self.goto_first_unlabeled_image)
+        QShortcut(QKeySequence("Shift+U"), self, self.goto_next_unlabeled_image)
+        QShortcut(QKeySequence("Shift+Ctrl+U"), self, self.goto_prev_unlabeled_image)
+
         # 类别选择快捷键
         for key, index in Config.SHORTCUTS.items():
             if key.isdigit():
                 qt_key = getattr(Qt.Key, f'Key_{key}')
                 QShortcut(qt_key, self, lambda idx=index: self.select_category_by_index(idx))
+
+    def get_unlabeled_images(self):
+        """获取未标注的图片索引列表"""
+        if not self.image_files:
+            return []
+
+        image_root = self.annotations_data.get("image_root", "")
+        annotations = self.annotations_data.get('annotations', {})
+
+        unlabeled_indices = []
+        for i, image_path in enumerate(self.image_files):
+            rel_path = get_relative_path(image_path, image_root) if image_root else image_path
+            if rel_path not in annotations or not annotations[rel_path].get('category'):
+                unlabeled_indices.append(i)
+
+        return unlabeled_indices
+
+    def goto_first_unlabeled_image(self):
+        """跳转到第一张未标注的图片"""
+        unlabeled_indices = self.get_unlabeled_images()
+
+        if not unlabeled_indices:
+            QMessageBox.information(self, "信息", "所有图片都已标注完成！🎉")
+            return
+
+        first_unlabeled = unlabeled_indices[0]
+        self.current_image_index = first_unlabeled
+        self.load_current_image()
+        self.update_ui_state()
+
+        self.status_label.setText(f"已跳转到第一张未标注图片 ({first_unlabeled + 1}/{len(self.image_files)})")
+
+    def goto_next_unlabeled_image(self):
+        """跳转到下一张未标注的图片"""
+        unlabeled_indices = self.get_unlabeled_images()
+
+        if not unlabeled_indices:
+            QMessageBox.information(self, "信息", "所有图片都已标注完成！🎉")
+            return
+
+        # 查找当前位置之后的未标注图片
+        next_unlabeled = None
+        for index in unlabeled_indices:
+            if index > self.current_image_index:
+                next_unlabeled = index
+                break
+
+        # 如果没找到，从头开始
+        if next_unlabeled is None:
+            next_unlabeled = unlabeled_indices[0]
+            if next_unlabeled == self.current_image_index:
+                QMessageBox.information(self, "信息", "这是唯一一张未标注的图片！")
+                return
+
+        self.current_image_index = next_unlabeled
+        self.load_current_image()
+        self.update_ui_state()
+
+        self.status_label.setText(f"已跳转到下一张未标注图片 ({next_unlabeled + 1}/{len(self.image_files)})")
+
+    def goto_prev_unlabeled_image(self):
+        """跳转到上一张未标注的图片"""
+        unlabeled_indices = self.get_unlabeled_images()
+
+        if not unlabeled_indices:
+            QMessageBox.information(self, "信息", "所有图片都已标注完成！🎉")
+            return
+
+        # 查找当前位置之前的未标注图片
+        prev_unlabeled = None
+        for index in reversed(unlabeled_indices):
+            if index < self.current_image_index:
+                prev_unlabeled = index
+                break
+
+        # 如果没找到，从最后开始
+        if prev_unlabeled is None:
+            prev_unlabeled = unlabeled_indices[-1]
+            if prev_unlabeled == self.current_image_index:
+                QMessageBox.information(self, "信息", "这是唯一一张未标注的图片！")
+                return
+
+        self.current_image_index = prev_unlabeled
+        self.load_current_image()
+        self.update_ui_state()
+
+        self.status_label.setText(f"已跳转到上一张未标注图片 ({prev_unlabeled + 1}/{len(self.image_files)})")
+
+    def highlight_unlabeled_in_list(self):
+        """在图片列表中高亮显示未标注的图片"""
+        if not self.image_files:
+            return
+
+        unlabeled_indices = set(self.get_unlabeled_images())
+
+        for i in range(self.image_list.count()):
+            item = self.image_list.item(i)
+            if i in unlabeled_indices:
+                # 在文件名前添加标记
+                if not item.text().startswith("⚠️"):
+                    filename = os.path.basename(self.image_files[i])
+                    item.setText(f"⚠️ {filename}")
+            else:
+                # 移除警告标记
+                if item.text().startswith("⚠️"):
+                    filename = os.path.basename(self.image_files[i])
+                    item.setText(f"✅ {filename}")
+                elif not item.text().startswith("✅"):
+                    filename = os.path.basename(self.image_files[i])
+                    item.setText(f"✅ {filename}")
 
     def open_folder(self):
         """打开文件夹"""
@@ -414,6 +569,9 @@ class MainWindow(QMainWindow):
         for image_path in self.image_files:
             filename = os.path.basename(image_path)
             self.image_list.addItem(filename)
+
+        # 高亮显示未标注的图片
+        self.highlight_unlabeled_in_list()
 
         self.current_image_index = 0
         self.load_current_image()
@@ -472,6 +630,12 @@ class MainWindow(QMainWindow):
             category = annotation.get('category', '未标注')
             self.current_category_label.setText(f"类别: {category}")
 
+            # 根据标注状态设置样式
+            if category == '未标注':
+                self.current_category_label.setStyleSheet("font-weight: bold; color: #f44336;")
+            else:
+                self.current_category_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+
             # 更新类别管理器选择
             categories = self.category_manager.get_categories()
             if category in categories:
@@ -507,6 +671,9 @@ class MainWindow(QMainWindow):
             # 更新显示
             self.current_category_label.setText(f"类别: {category_name}")
             self.current_category_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+
+            # 更新图片列表中的标记
+            self.highlight_unlabeled_in_list()
 
             # 更新统计
             self.update_statistics()
@@ -553,15 +720,21 @@ class MainWindow(QMainWindow):
     def update_ui_state(self):
         """更新界面状态"""
         has_images = len(self.image_files) > 0
+        unlabeled_count = len(self.get_unlabeled_images())
 
         self.prev_btn.setEnabled(has_images and self.current_image_index > 0)
         self.next_btn.setEnabled(has_images and self.current_image_index < len(self.image_files) - 1)
+
+        # 更新快速定位按钮状态
+        self.goto_first_btn.setEnabled(has_images and unlabeled_count > 0)
+        self.goto_next_btn.setEnabled(has_images and unlabeled_count > 0)
 
     def update_progress(self):
         """更新进度"""
         if not self.image_files:
             self.progress_bar.setValue(0)
             self.progress_label.setText("0 / 0 (0.0%)")
+            self.unlabeled_count_label.setText("未标注: 0 张")
             return
 
         image_root = self.annotations_data.get("image_root", "")
@@ -571,15 +744,20 @@ class MainWindow(QMainWindow):
         annotated_count = 0
         for image_path in self.image_files:
             rel_path = get_relative_path(image_path, image_root) if image_root else image_path
-            if rel_path in annotations:
+            if rel_path in annotations and annotations[rel_path].get('category'):
                 annotated_count += 1
 
         total_count = len(self.image_files)
+        unlabeled_count = total_count - annotated_count
         progress_percent = (annotated_count / total_count) * 100 if total_count > 0 else 0
 
         self.progress_bar.setMaximum(total_count)
         self.progress_bar.setValue(annotated_count)
         self.progress_label.setText(f"{annotated_count} / {total_count} ({progress_percent:.1f}%)")
+        self.unlabeled_count_label.setText(f"未标注: {unlabeled_count} 张")
+
+        # 更新按钮状态
+        self.update_ui_state()
 
     def update_statistics(self):
         """更新统计信息"""
@@ -598,11 +776,17 @@ class MainWindow(QMainWindow):
                 current_annotations[rel_path] = annotations[rel_path]
 
         stats, total = get_annotation_stats(current_annotations)
+        unlabeled_count = len(self.image_files) - total
 
         stats_text = f"当前文件夹: {os.path.basename(self.current_folder) if self.current_folder else '未设置'}\n"
         stats_text += f"总图像数: {len(self.image_files)}\n"
         stats_text += f"已标注数: {total}\n"
-        stats_text += f"未标注数: {len(self.image_files) - total}\n\n"
+        stats_text += f"未标注数: {unlabeled_count}\n"
+
+        if unlabeled_count > 0:
+            stats_text += f"完成度: {(total / len(self.image_files) * 100):.1f}%\n\n"
+        else:
+            stats_text += f"完成度: 100% 🎉\n\n"
 
         if stats:
             stats_text += "各类别统计:\n"
@@ -616,6 +800,9 @@ class MainWindow(QMainWindow):
         stats_text += f"\n标注格式版本: {format_version}"
 
         self.stats_text.setText(stats_text)
+
+        # 更新图片列表高亮
+        self.highlight_unlabeled_in_list()
 
     def save_annotations(self):
         """保存标注"""
